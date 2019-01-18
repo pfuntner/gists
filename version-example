@@ -3,7 +3,9 @@
 import os
 import re
 import sys
+import logging
 import argparse
+import datetime
 import subprocess
 
 def run(cmd):
@@ -13,18 +15,18 @@ def run(cmd):
   try:
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
   except Exception as e:
-    print e
-    pass
+    log.debug('Ignoring `{e!s}` from {cmd}'.format(**locals()))
   else:
     (stdout, stderr) = p.communicate()
     rc = p.wait()
-    print '{rc}, {stdout!r}, {stderr!r}'.format(**locals())
+    log.debug('{cmd}: {rc}, {stdout!r}, {stderr!r}'.format(**locals()))
     if (rc == 0) and (not stdout):
       rc = None
   return (rc, stdout, stderr)
 
 def get_version():
   git_used = False
+  ret = '?'
 
   dir = os.path.dirname(sys.argv[0])
   base = os.path.basename(sys.argv[0])
@@ -35,24 +37,54 @@ def get_version():
     pass
   else:
     (rc, stdout, stderr) = run(['git', 'log', '-1', base])
-    print '{rc}, {stdout!r}, {stderr!r}'.format(**locals())
-    if rc == 0:
-      """
-        commit {SHA1}
-        Author: {FIRST_NAME} {LAST_NAME} <{EMAIL_ADDRESS}>
-        Date:   Wed Jan 16 09:32:03 2019 -0500
-        . 
-        . 
-        . 
-      """
-      match = re.search(r'^commit\s+(\S+).*\nDate:\s+(([A-Z][a-z]{2} ){2} [ 0123]\d (\d{2}:){2}]\d{2} \d{4})', stdout, re.DOTALL)
-      print match.groups() if match else None
+    """
+      commit {SHA1}
+      Author: {FIRST_NAME} {LAST_NAME} <{EMAIL_ADDRESS}>
+      Date:   Wed Jan 16 09:32:03 2019 -0500
+      . 
+      . 
+      . 
+    """
+    match = re.search(r'^commit\s+(\S+).*\nDate:\s+(([A-Z][a-z]{2} ){2}[ 0123]\d (\d{2}:){2}\d{2} \d{4})', stdout, re.DOTALL)
+    log.debug('`git log -1` search groups: {groups}'.format(groups=match.groups() if match else None))
+    if match:
+      commit = match.group(1)[:6]
+      timestamp = datetime.datetime.strptime(match.group(2), '%a %b %d %H:%M:%S %Y')
+      log.debug('timestamp: {timestamp!s}'.format(**locals()))
+
+      (rc, stdout, stderr) = run('git branch')
+      match = re.search(r'\*\s(\S+)', stdout, re.DOTALL)
+      log.debug('`git branch` search groups: {groups}'.format(groups=match.groups() if match else None))
+      if match:
+        branch = match.group(1)
+
+        (rc, stdout, stderr) = run('git remote -v')
+        """
+          origin  https://github.com/pfuntner/gists.git (fetch)
+        """
+        hits = list(re.finditer(r'(\S+)\s(https?://\S+)\s\(fetch\)', stdout))
+        log.debug('`git remote -v` hits: {hits}'.format(hits=[hit.groups() for hit in hits]))
+        if hits:
+          hits = ['{name}:{url}'.format(name=hit.group(1), url=hit.group(2)) for hit in hits]
+          ret = '{commit}, {branch}, {timestamp!s}, {hits}'.format(**locals())
+          git_used = True     
 
   os.chdir(cwd)
 
-  return '?'
+  if not git_used:
+    ret = str(datetime.datetime.fromtimestamp(os.path.getmtime(sys.argv[0])))
+
+  return ret
       
+logging.basicConfig(format='%(asctime)s %(levelname)s %(pathname)s:%(lineno)d %(msg)s')
+log = logging.getLogger()
+log.setLevel(logging.WARNING)
 
 parser = argparse.ArgumentParser(description='Example of doing a nifty --version')
-parser.add_argument('--version', action='version', version=get_version())
+parser.add_argument('-v', '--verbose', dest='verbose', action='count', help='Print more messages')
+parser.add_argument('--version', action='version', version=get_version(), help='See wonderful version information')
 args = parser.parse_args()
+
+log.setLevel(logging.WARNING - (args.verbose or 0) * 10)
+
+# print repr(get_version())
